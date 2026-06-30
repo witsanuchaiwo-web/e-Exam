@@ -1,0 +1,36 @@
+WITH restaurant_aov AS (
+    -- ขั้นตอนที่ 1: คำนวณค่า AOV ของแต่ละร้านในเดือนปัจจุบัน
+    SELECT 
+        r.restaurant_id,
+        r.restaurant_name,
+        r.category,
+        COALESCE(AVG(o.total_amount), 0) AS average_order_value
+    FROM restaurants r
+    LEFT JOIN orders o ON r.restaurant_id = o.restaurant_id
+        AND o.status = 'delivered'
+        AND o.created_at >= DATE_TRUNC('month', CURRENT_DATE)
+        AND o.created_at < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'
+    GROUP BY r.restaurant_id, r.restaurant_name, r.category
+),
+ranked_restaurants AS (
+    -- ขั้นตอนที่ 2: ใช้ Window Function จัดอันดับร้านค้าภายในแต่ละ Category
+    SELECT 
+        restaurant_id,
+        restaurant_name,
+        category,
+        average_order_value,
+        DENSE_RANK() OVER (
+            PARTITION BY category 
+            ORDER BY average_order_value DESC
+        ) AS ranking
+    FROM restaurant_aov
+)
+-- ขั้นตอนที่ 3: กรองเอาเฉพาะอันดับ 1-3 ของแต่ละกลุ่ม
+SELECT 
+    category,
+    ranking,
+    restaurant_name,
+    average_order_value
+FROM ranked_restaurants
+WHERE ranking <= 3
+ORDER BY category, ranking;
