@@ -1,0 +1,53 @@
+// ฟังก์ชันคำนวณระยะทางด้วยสูตร Haversine (ผลลัพธ์เป็นเมตร)
+function haversineDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371e3; // รัศมีของโลก (เมตร)
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+    const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+              Math.cos(phi1) * Math.cos(phi2) *
+              Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c; // ระยะทางหน่วยเป็นเมตร
+}
+
+function assignRider(order, riders, currentTimestamp, maxRadius = 5000) {
+    const TWO_MINUTES_IN_MS = 2 * 60 * 1000;
+
+    // 1. Filter: คัดเลือกเฉพาะ Rider ที่พร้อมทำงาน
+    const validRiders = riders.map(rider => {
+        const distance = haversineDistance(
+            order.restaurantLat, order.restaurantLon,
+            rider.lat, rider.lon
+        );
+        const isStale = (currentTimestamp - rider.lastUpdated) > TWO_MINUTES_IN_MS;
+
+        return { ...rider, distance, isStale };
+    }).filter(rider => {
+        // เงื่อนไข: พิกัดต้องไม่อัปเดตเกิน 2 นาที และอยู่ในรัศมีที่กำหนด (ตอนเริ่มคือ 5 กม.)
+        return !rider.isStale && rider.distance <= maxRadius;
+    });
+
+    // Edge Case: ถ้าไม่เจอ Rider เลยในรัศมีที่กำหนด ให้คืนค่า null (เพื่อไปเข้า Fallback Logic)
+    if (validRiders.length === 0) {
+        return null; 
+    }
+
+    // 2. Sort & Tie-breaker: หา Rider ที่เหมาะสมที่สุด
+    validRiders.sort((a, b) => {
+        const distanceDiff = a.distance - b.distance;
+
+        // ถ้าระยะทางต่างกันไม่เกิน 500 เมตร (0.5 กม.) ให้ใช้ Rating เป็นตัวตัดสิน (ใครเรตติ้งสูงกว่าอยู่อันดับแรก)
+        if (Math.abs(distanceDiff) <= 500) {
+            return b.rating - a.rating; 
+        }
+
+        // ถ้าระยะทางต่างกันเกิน 500 เมตร ให้เลือกคนที่ใกล้ที่สุดก่อน
+        return distanceDiff;
+    });
+
+    return validRiders[0]; // คืนค่า Rider ที่ดีที่สุด
+}
