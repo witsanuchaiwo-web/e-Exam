@@ -1,0 +1,47 @@
+async function placeOrder(orderId, items) {
+    // 1. เริ่มต้น Transaction เพื่อรวมทุก Query ให้เป็นเนื้อเดียวกัน (Atomicity)
+    const transaction = await db.beginTransaction();
+
+    try {
+        // ดึงเฉพาะ ID ทั้งหมดออกมาเพื่อใช้ใน WHERE IN (ลด N+1 Query ให้เหลือ Query เดียวในการดึงข้อมูล)
+        const itemIds = items.map(item => item.id);
+        const itemMap = new Map(items.map(item => [item.id, item.qty]));
+
+        // 2. ใช้ Pessimistic Locking (FOR UPDATE) เพื่อล็อก Row ของสินค้าเหล่านั้นไม่ให้ Request อื่นมาแก้พร้อมกัน
+        // และใช้ Parameterized Query เพื่อป้องกัน SQL Injection
+        const products = await db.query(
+            `SELECT id, stock FROM menu WHERE id IN (?) FOR UPDATE`, 
+            [itemIds], 
+            { transaction }
+        );
+
+        // ตรวจสอบสต็อกของทุกชิ้นในหน่วยความจำ (Memory)
+        for (const product of products) {
+            const requestedQty = itemMap.get(product.id);
+            if (product.stock < requestedQty) {
+                throw new Error(`Product ID ${product.id} is out of stock!`);
+            }
+        }
+
+        // 3. ทำการอัปเดตสต็อกทีละรายการ (หรือใช้ Bulk Update ถ้า Database รองรับ)
+        // ใช้ Atomic Update ควบคู่ไปด้วยเพื่อความปลอดภัยสูงสุด
+        for (const item of items) {
+            await db.query(
+                `UPDATE menu SET stock = stock - ? WHERE id = ?`,
+                [item.qty, item.id],
+                { transaction }
+            );
+        }
+
+        // 4. สร้าง Order ภายใน Transaction เดียวกัน
+        await Order.create({ id: orderId, status: 'confirmed' }, { transaction });
+
+        // ยืนยันการทำงานทั้งหมดหากไม่มีอะไรผิดพลาด
+        await transaction.commit();
+
+    } catch (error) {
+        // หากเกิด Error แม้แต่จุดเดียว ให้ยกเลิกและคืนค่าสต็อกทั้งหมด (Rollback)
+        await transaction.rollback();
+        throw error; // ส่ง Error ต่อไปให้ชั้นบนจัดการ
+    }
+}
