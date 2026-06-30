@@ -1,0 +1,29 @@
+1. Data Flow (โปรโตคอลการสื่อสาร)
+การออกแบบที่ดีควรแยกโปรโตคอลระหว่างฝั่ง Rider (ผู้ส่งข้อมูล) และฝั่ง Customer (ผู้รับข้อมูล) เพื่อดึงข้อดีสูงสุดของแต่ละเทคโนโลยีมาใช้:
+
+Rider ไปยัง Server  ใช้ MQTT (Message Queuing Telemetry Transport)
+
+เหตุผล: MQTT ถูกออกแบบมาเพื่ออุปกรณ์ Mobile และ IoT โดยเฉพาะ มีน้ำหนักเบามาก (Lightweight) ประหยัดแบตเตอรี่ และใช้ Bandwidth ต่ำ
+
+รองรับสถานการณ์ที่เน็ตมือถือของ Rider ไม่เสถียร (Network Drop) ได้ดี โดยมีระบบ QoS (Quality of Service) ช่วยการันตีการส่งข้อความ
+
+Server ไปยัง Customer  ใช้ WebSocket
+
+เหตุผล: ลูกค้า 10,000 คนเปิดแอปหรือเบราว์เซอร์ดูตำแหน่งพร้อมกัน WebSocket สร้างการเชื่อมต่อแบบ Persistent (เปิดค้างไว้) ทำให้ Server สามารถ Push ข้อมูลพิกัดใหม่ๆ ไปยัง Client ได้ทันทีโดยที่ Client ไม่ต้องคอยส่ง Request มาถาม (Polling) ซึ่งจะลด Overhead ของระบบลงมหาศาล
+
+(หมายเหตุ: gRPC เหมาะสำหรับการคุยกันเองระหว่าง Microservices ภายใน Backend (Server-to-Server) มากกว่าการนำมาให้ Mobile/Web Client ต่อตรงในกรณีนี้)
+
+2. Storage Strategy (การจัดการพิกัดที่เปลี่ยนทุก 2 วินาที)
+ด้วย Rider 2,000 คน ส่งพิกัดทุก 2 วินาที ระบบจะมี Write Load ถึง 1,000 TPS (Transactions Per Second) การเขียนลง SQL หรือ Disk ตรงๆ จะทำให้เกิด I/O Bottleneck ทันที
+
+ชั้นที่ 1: Live Location (ใช้ In-memory Database)
+
+เลือกใช้: Redis (In-memory)
+
+เหตุผล: เก็บเฉพาะ "ตำแหน่งล่าสุด ณ วินาทีนี้" ของ Rider (Stateful data) ซึ่ง Redis ทำงานบน RAM จึงอ่านเขียนได้เร็วกว่า Disk มากๆ สามารถใช้คำสั่ง GEOADD หรือเก็บเป็น Hash ธรรมดาก็ได้ ข้อมูลชุดนี้ใช้เพื่อดึงไปแสดงผลให้ลูกค้าดูแบบ Real-time (Disk I/O จะไม่เต็มแน่นอน)
+
+ชั้นที่ 2: Historical/Route Data (ใช้ NoSQL หรือ Time-Series)
+
+เลือกใช้: MongoDB, Cassandra หรือ Time-Series DB (เช่น InfluxDB)
+
+กลยุทธ์: ไม่เขียนลง Disk ทุก 2 วินาที แต่ใช้การ Batching โดยเก็บพิกัดไว้ใน Memory/Message Queue (เช่น Kafka) ก่อน แล้วมัดรวมกันเขียนลง Database หลัก (เช่น ทุกๆ 15-30 วินาที) เพื่อเก็บไว้เป็นประวัติการเดินทาง (Route Playback) หรือใช้คำนวณค่ารอบ
